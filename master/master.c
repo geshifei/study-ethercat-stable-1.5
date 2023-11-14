@@ -138,7 +138,24 @@ void ec_master_init_static(void)
    Master constructor.
    \return 0 in case of success, else < 0
 */
-
+/*
+ * ec_master_init功能:
+ * 1) 主站状态机设为EC_ORPHANED,表示主站还没有关联网卡.    <==========很重要!!!
+ * 2）初始化主站的数据报master->ext_datagram_ring[]，
+ *    这个报文用于处理与slave相关请求，如配置、扫描、SDO、PDO等.
+ * 3) 将macs[i]对应的device与master关联，并分配、初始化device->tx_skb[i]
+ *    skb的长度位ETH_FRAME_LEN，即除去报文头、报文尾后，可用的报文长度（1514个字节）.
+ *    device->tx_skb[i]缓冲区有EC_TX_RING_SIZE组（2组）.
+ * 4) 初始化主状态机master->fsm（名字为"master-fsm"）用到的报master->fsm_datagram
+ * 5) 为master->fsm_datagram分配payload缓冲区，缓冲区大小EC_MAX_DATA_SIZE是除去
+ *    以太网头、ecat头等信息后EtherCAT可用的报文长度大小.
+ * 6）ec_fsm_master_init初始化主状态机master->fsm的子状态机fsm->fsm_coe、fsm->fsm_pdo等等.
+ * 7) 为master->ext_datagram_ring[]分配payload缓冲区(见1)
+ * 8）初始化DC同步报文master->ref_sync_datagram，报文的名称为"refsync"
+ * 9）初始化DC补偿报文master->sync_datagram，报文的名称为"sync"
+ * 10）初始化DC同步监控报文master->sync_mon_datagram，报文的名称为"syncmon"
+ * 11）通过ec_cdev_init创建master的字符设备，类似于/dev/EtherCAT0
+ */
 int ec_master_init(ec_master_t *master, /**< EtherCAT master */
         unsigned int index, /**< master index */
         const uint8_t *main_mac, /**< MAC address of main device */
@@ -299,10 +316,6 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
     // init sync datagram
     ec_datagram_init(&master->sync_datagram);
     snprintf(master->sync_datagram.name, EC_DATAGRAM_NAME_SIZE, "sync");
-    /*
-     * DC System Time Difference寄存器0x092c--0x092f，每个地址一个byte，共4字节.
-     * 分配同步报文的payload缓冲区.
-     */
     ret = ec_datagram_prealloc(&master->sync_datagram, 4);
     if (ret < 0) {
         ec_datagram_clear(&master->sync_datagram);
@@ -320,6 +333,9 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
  *   0x092c--0x092f   0--30  系统时间差        本地系统时间与参考时钟系统时间值之差                         0
  *                     31       符号           0:本地系统时间≥参考时钟时间                         0
  *                                            1:本地系统时间＜参考时钟时
+ *
+ * DC System Time Difference寄存器0x092c--0x092f，每个地址一个byte，共4字节.
+ * ec_datagram_brd中EC_FUNC_HEADER分配同步报文的4字节payload缓冲区.
  */
     ret = ec_datagram_brd(&master->sync_mon_datagram, 0x092c, 4);
     if (ret < 0) {
@@ -1588,6 +1604,12 @@ static int ec_master_idle_thread(void *priv_data)
 
         // receive
         down(&master->io_sem);
+        /*
+         * 接收流程：
+         * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即ec_poll -->
+         * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx，从DMA缓冲区拷贝
+         * 数据帧到device的netdev_priv(dev)->rx_ring.
+         */
         ecrt_master_receive(master);
         up(&master->io_sem);
 
@@ -1595,7 +1617,11 @@ static int ec_master_idle_thread(void *priv_data)
         if (down_interruptible(&master->master_sem)) {
             break;
         }
-
+        /*
+         * ec_init_module加载主站时，通过ec_init_module --> ec_master_init -->
+         * ec_fsm_master_init --> ec_fsm_master_reset，将master->fsm->state状态
+         * 处理函数设置为ec_fsm_master_state_start.
+         */
         fsm_exec = ec_fsm_master_exec(&master->fsm);
 
         ec_master_exec_slave_fsms(master);
@@ -2522,7 +2548,13 @@ void ecrt_master_send(ec_master_t *master)
 }
 
 /*****************************************************************************/
-
+/*
+ * 以rt8139网卡为例，加载网卡驱动时:
+ * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver)--> rtl8139_pci_driver的
+ * probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中）.
+ * rtl8139_init_one执行tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)
+ * 设置网卡的device->poll函数为ec_poll（8139too-3.4-ethercat.c文件中）.
+ */
 void ecrt_master_receive(ec_master_t *master)
 {
     unsigned int dev_idx;

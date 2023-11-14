@@ -239,7 +239,16 @@ void ec_fsm_master_state_start(
         wake_up_all(&master->request_queue);
         return;
     }
-
+    /*
+     * Register AL Status (0x0130:0x0131)
+     * bit3:0 Actual State of the Device State Machine:
+     * 1: Init State
+     * 3: Bootstrap State
+     * 2: Pre-Operational State
+     * 4: Safe-Operational State
+     * 8: Operational State
+     * 其他bit参考手册定义.
+     */
     ec_datagram_brd(fsm->datagram, 0x0130, 2);
     ec_datagram_zero(fsm->datagram);
     fsm->datagram->device_index = fsm->dev_idx;

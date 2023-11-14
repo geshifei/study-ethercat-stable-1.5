@@ -589,7 +589,13 @@ void ec_device_poll(
 #ifdef EC_DEBUG_RING
     do_gettimeofday(&device->timeval_poll);
 #endif
-	/* 注册的ec_poll */
+	/*
+	 * 以rt8139网卡为例，加载网卡驱动时:
+	 * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver)--> rtl8139_pci_driver的
+	 * probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中）.
+	 * rtl8139_init_one执行tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)
+	 * 设置网卡的device->poll函数为ec_poll（8139too-3.4-ethercat.c文件中）.
+	 */
     device->poll(device->dev);
 }
 
@@ -676,11 +682,16 @@ void ecdev_withdraw(ec_device_t *device /**< EtherCAT device */)
  * \ingroup DeviceInterface
  */
 /*
- * insmod XX网卡驱动XX.ko时会调用到probe函数,probe函数又会调用ecdev_offer.
- * 以rt8139网卡为例，rtl8139_pci_driver的probe函数是rtl8139_init_one,
- * rtl8139_init_one定义在8139too-3.4-ethercat.c文件中,该函数逻辑:
- * 1)stp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)给主站绑定一个网卡,
- * 2)接着ecdev_open(tp->ecdev)打开主站，主站进入EC_IDLE状态，
+ * insmod XX网卡驱动XX.ko时会调用到probe函数,probe函数调用ecdev_offer将该网卡绑定到主站上.
+ * 绑定到哪个主站是由mac地址决定的，创建主站模块时用户传入网卡的mac地址(见ec_init_module)，
+ * 记录在masters[i]，网卡加载时就根据网卡的mac，绑定到对应的master.
+ *
+ * 以rt8139网卡为例：
+ * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver)-->
+ * rtl8139_pci_driver执行的probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中）.
+ * rtl8139_init_one函数逻辑:
+ * 1)stp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)将网卡绑定到主站,
+ * 2)接着ecdev_open(tp->ecdev)打开主站，主站进入EC_IDLE阶段，并循环执行ec_master_idle_thread线程
  * ecdev_open -> ec_master_enter_idle_phase -> ec_master_thread_start循环执行
  * 线程ec_master_idle_thread
  */

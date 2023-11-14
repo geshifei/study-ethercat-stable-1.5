@@ -98,6 +98,19 @@ MODULE_PARM_DESC(run_on_cpu, "Bind kthreads to a specific cpu");
  * Initializes \a master_count masters.
  * \return 0 on success, else < 0
  */
+/*
+ * 如何看代码：
+ * 1，加载主站ec_master模块，进入EC_ORPHANED阶段
+ * 大部分操作是由ec_master_init完成的，参考函数说明.
+ * 重要的是，master->fsm->state状态处理函数设置为ec_fsm_master_state_start.
+ * 2，加载网卡驱动，主站进入EC_IDLE阶段
+ * 加载网卡驱动时，根据网卡的mac，将网卡绑定到指定的主站，
+ * 绑定后主站进入EC_IDLE阶段，并执行ec_master_idle_thread线程.
+ * 以rt8139为例:
+ * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver) -->
+ * rtl8139_pci_driver，执行的probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中），
+ * 上面加载驱动的流程可从rtl8139_init_one函数看起.
+ */
 int __init ec_init_module(void)
 {
     int i, ret = 0;
@@ -158,16 +171,23 @@ int __init ec_init_module(void)
 
     /*
      * ec_master_init功能:
-     * 1）初始化主站的数据报master->ext_datagram_ring[]，
+     * 1) 主站状phase设为EC_ORPHANED,表示主站还没有关联网卡.    <==========很重要!!!
+     * 2）初始化主站的数据报master->ext_datagram_ring[]，
      *    这个报文用于处理与slave相关请求，如配置、扫描、SDO、PDO等.
-     * 2) 将macs[i]对应的device与master关联，并分配、初始化device->tx_skb[i]
+     * 3) 将macs[i]对应的device与master关联，并分配、初始化device->tx_skb[i]
      *    skb的长度位ETH_FRAME_LEN，即除去报文头、报文尾后，可用的报文长度（1514个字节）.
      *    device->tx_skb[i]缓冲区有EC_TX_RING_SIZE组（2组）.
-     * 3) 初始化主状态机master->fsm（名字为"master-fsm"）用到的报master->fsm_datagram
-     * 4) 为master->fsm_datagram分配payload缓冲区，缓冲区大小EC_MAX_DATA_SIZE是除去
+     * 4) 初始化主状态机master->fsm（名字为"master-fsm"）用到的报master->fsm_datagram
+     * 5) 为master->fsm_datagram分配payload缓冲区，缓冲区大小EC_MAX_DATA_SIZE是除去
      *    以太网头、ecat头等信息后EtherCAT可用的报文长度大小.
-     * 5）ec_fsm_master_init初始化主状态机master->fsm的子状态机fsm->fsm_coe、fsm->fsm_pdo等等.
-     * 6) 为master->ext_datagram_ring[]分配payload缓冲区(见1)
+     * 6）ec_fsm_master_init
+     *    6.1)通过ec_fsm_master_reset设为将主站状态机设为START(对应处理函数ec_fsm_master_state_start）
+     *    6.2)初始化主状态机master->fsm的子状态机fsm->fsm_coe、fsm->fsm_pdo等等.
+     * 7) 为master->ext_datagram_ring[]分配payload缓冲区(见1)
+     * 8）初始化DC同步报文master->ref_sync_datagram，报文的名称为"refsync"
+     * 9）初始化DC补偿报文master->sync_datagram，报文的名称为"sync"
+     * 10）初始化DC同步监控报文master->sync_mon_datagram，报文的名称为"syncmon"
+     * 11）通过ec_cdev_init创建master的字符设备，类似于/dev/EtherCAT0
      */
     for (i = 0; i < master_count; i++) {
         ret = ec_master_init(&masters[i], i, macs[i][0], macs[i][1],
@@ -496,9 +516,16 @@ const char *ec_device_names[2] = {
  * \ingroup DeviceInterface
  */
 /*
- * insmod XX网卡驱动XX.ko时会调用到probe函数,probe函数又会调用ecdev_offer.
- * 以rt8139网卡为例，rtl8139_pci_driver的probe函数是8139too-3.4-ethercat.c文件中的rtl8139_init_one,
- * stp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)给主站提供一个网卡.s
+ * insmod XX网卡驱动XX.ko时会调用到probe函数,probe函数调用ecdev_offer将该网卡绑定到主站上.
+ * 绑定到哪个主站是由mac地址决定的，创建主站模块时用户传入网卡的mac地址(见ec_init_module)，
+ * 记录在masters[i]，网卡加载时就根据网卡的mac，绑定到对应的master.
+ * 以rt8139网卡为例：
+ * rtl8139_pci_driver的probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中）,
+ * rtl8139_init_one函数逻辑:
+ * 1)stp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)将网卡绑定到主站,
+ * 2)接着ecdev_open(tp->ecdev)打开主站，主站进入EC_IDLE阶段，并循环执行ec_master_idle_thread线程
+ * ecdev_open -> ec_master_enter_idle_phase -> ec_master_thread_start循环执行
+ * 线程ec_master_idle_thread
  */
 ec_device_t *ecdev_offer(
         struct net_device *net_dev, /**< net_device to offer */
