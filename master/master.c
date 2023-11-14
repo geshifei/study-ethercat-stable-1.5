@@ -273,6 +273,7 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
     ec_fsm_master_init(&master->fsm, master, &master->fsm_datagram);
 
     // alloc external datagram ring
+    /* 外部数据报队列用于从站状态机,每个状态机执行期间使用的数据报从该区域分配 */
     for (i = 0; i < EC_EXT_RING_SIZE; i++) {
         ec_datagram_t *datagram = &master->ext_datagram_ring[i];
         ret = ec_datagram_prealloc(datagram, EC_MAX_DATA_SIZE);
@@ -298,6 +299,10 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
     // init sync datagram
     ec_datagram_init(&master->sync_datagram);
     snprintf(master->sync_datagram.name, EC_DATAGRAM_NAME_SIZE, "sync");
+    /*
+     * DC System Time Difference寄存器0x092c--0x092f，每个地址一个byte，共4字节.
+     * 分配同步报文的payload缓冲区.
+     */
     ret = ec_datagram_prealloc(&master->sync_datagram, 4);
     if (ret < 0) {
         ec_datagram_clear(&master->sync_datagram);
@@ -310,6 +315,12 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
     ec_datagram_init(&master->sync_mon_datagram);
     snprintf(master->sync_mon_datagram.name, EC_DATAGRAM_NAME_SIZE,
             "syncmon");
+/*
+ *       地址            位        名称                     描述                         复位值
+ *   0x092c--0x092f   0--30  系统时间差        本地系统时间与参考时钟系统时间值之差                         0
+ *                     31       符号           0:本地系统时间≥参考时钟时间                         0
+ *                                            1:本地系统时间＜参考时钟时
+ */
     ret = ec_datagram_brd(&master->sync_mon_datagram, 0x092c, 4);
     if (ret < 0) {
         ec_datagram_clear(&master->sync_mon_datagram);
@@ -918,7 +929,13 @@ void ec_master_set_send_interval(
         unsigned int send_interval /**< Send interval */
         )
 {
+    /* 调用ecrt_master_send的时间间隔 */
     master->send_interval = send_interval;
+    /*
+     * 100Mbps速度，传输1bit需要EC_BYTE_TRANSMISSION_TIME_NS(80ns).
+     * send_interval单位是us，send_interval * 1000转换成ns.
+     * max_queue_size是在send_interval时间内能够发送的最多bit数量.
+     */
     master->max_queue_size =
         (send_interval * 1000) / EC_BYTE_TRANSMISSION_TIME_NS;
     master->max_queue_size -= master->max_queue_size / 10;

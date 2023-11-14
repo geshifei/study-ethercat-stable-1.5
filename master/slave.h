@@ -173,6 +173,11 @@ typedef struct {
 
 /** EtherCAT slave.
  */
+ /*
+ * slave状态机和master状态机类似，slave状态机内还包含许多子状态机。slave状态机主要目的是：
+ * 主站管理从站状态
+ * 主站与从站应用层(AL)通讯。比如具有EoE功能的从站,主站通过该从站下的子状态机fsm_eoe来管理主站与从站应用层的EOE通讯。
+ */
 struct ec_slave
 {
     ec_master_t *master; /**< Master owning the slave. */

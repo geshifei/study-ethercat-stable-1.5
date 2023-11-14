@@ -131,6 +131,7 @@ int __init ec_init_module(void)
 
     // process MAC parameters
     for (i = 0; i < master_count; i++) {
+        /* insmod时指定的字符串类型的mac参数main_devices[]，转换成uint8_t形式存放在macs[] */
         ret = ec_mac_parse(macs[i][0], main_devices[i], 0);
         if (ret)
             goto out_class;
@@ -155,6 +156,19 @@ int __init ec_init_module(void)
         }
     }
 
+    /*
+     * ec_master_init功能:
+     * 1）初始化主站的数据报master->ext_datagram_ring[]，
+     *    这个报文用于处理与slave相关请求，如配置、扫描、SDO、PDO等.
+     * 2) 将macs[i]对应的device与master关联，并分配、初始化device->tx_skb[i]
+     *    skb的长度位ETH_FRAME_LEN，即除去报文头、报文尾后，可用的报文长度（1514个字节）.
+     *    device->tx_skb[i]缓冲区有EC_TX_RING_SIZE组（2组）.
+     * 3) 初始化主状态机master->fsm（名字为"master-fsm"）用到的报master->fsm_datagram
+     * 4) 为master->fsm_datagram分配payload缓冲区，缓冲区大小EC_MAX_DATA_SIZE是除去
+     *    以太网头、ecat头等信息后EtherCAT可用的报文长度大小.
+     * 5）ec_fsm_master_init初始化主状态机master->fsm的子状态机fsm->fsm_coe、fsm->fsm_pdo等等.
+     * 6) 为master->ext_datagram_ring[]分配payload缓冲区(见1)
+     */
     for (i = 0; i < master_count; i++) {
         ret = ec_master_init(&masters[i], i, macs[i][0], macs[i][1],
                     device_number, class, debug_level, run_on_cpu);
@@ -480,6 +494,11 @@ const char *ec_device_names[2] = {
  *
  * \return Pointer to device, if accepted, or NULL if declined.
  * \ingroup DeviceInterface
+ */
+/*
+ * insmod XX网卡驱动XX.ko时会调用到probe函数,probe函数又会调用ecdev_offer.
+ * 以rt8139网卡为例，rtl8139_pci_driver的probe函数是8139too-3.4-ethercat.c文件中的rtl8139_init_one,
+ * stp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)给主站提供一个网卡.s
  */
 ec_device_t *ecdev_offer(
         struct net_device *net_dev, /**< net_device to offer */

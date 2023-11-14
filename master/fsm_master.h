@@ -65,6 +65,12 @@ typedef struct ec_fsm_master ec_fsm_master_t; /**< \see ec_fsm_master */
 
 /** Finite state machine of an EtherCAT master.
  */
+/*
+ * matser状态机主要目的是：
+ * Bus monitoring 监控EtherCAT总线拓扑结构，如果发生改变，则重新扫描。
+ * Slave configuration 监视从站的应用程序层状态。如果从站未处于其应有的状态，则从站将被（重新）配置
+ * Request handling 请求处理（源自应用程序或外部来源），主站任务应该处理异步请求，例如:SII访问，SDO访问或类似
+ */
 struct ec_fsm_master {
     ec_master_t *master; /**< master the FSM runs on */
     ec_datagram_t *datagram; /**< datagram used in the state machine */
@@ -77,6 +83,10 @@ struct ec_fsm_master {
     unsigned long scan_jiffies; /**< beginning of slave scanning */
     uint8_t link_state[EC_MAX_NUM_DEVICES]; /**< Last link state for every
                                               device. */
+	/* 响应的从站数.
+	 * 空闲阶段master发送EC_DATAGRAM_BRD子报文，从站响应子报文后增加WKC计数值，
+	 * slaves_responding变量就是从站响应后的WKC值
+	 */
     unsigned int slaves_responding[EC_MAX_NUM_DEVICES]; /**< Number of
                                                           responding slaves
                                                           for every device. */

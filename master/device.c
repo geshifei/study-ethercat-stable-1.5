@@ -125,16 +125,114 @@ int ec_device_init(
         goto out_return;
     }
 #endif
-
+/*         dev_alloc_skb(unsigned int length)
+ *               /               \
+ *  1,alloc ak_buff struct      2,alloc data buffer
+ *            /                    \   data length = NET_SKB_PAD + length
+ *      struct sk_buff              \     + sizeof(struct skb_shared_info) 
+ *      _____________   ------>   _________________    
+ *      |    ....    |  | | |     |   NET_SKB_PAD  |
+ *      |    head ---|--| | |     |________________|
+ *      |    data ---|----| |     |                |
+ *      |    tail ---|------|     |     length     |
+ *      |            |            |                |
+ *      |    end  ---|------|     |                |
+ *      |    ...     |      |---->|________________|
+ *      |____________|            | skb_shared_info |
+ *                                |________________|
+ *  Buffer 分为三块，第一块是 NET_SKB_PAD 
+ *  #define NET_SKB_PAD max(32, L1_CACHE_BYTES， 即L1 CACHE Line 的大小，I7 CPU为64 Bytes
+ *
+ *  第二块，Length 是 dev_alloc_skb 的输入参数
+ *
+ *  第三块，izeof(struct skb_shared_info)，用于分散聚合（Scatter Gather）
+ *
+ * NET_SKB_PAD + length 长度的buffer用于存放数据包，
+ * 而 sizeof(struct skb_shared_info) 只是一个结构的长度，该结构的成员会再指向分散聚合的数据包.
+ * head/data/tail 初始时指向 buffer 的起始位置。而end指向 NET_SKB_PAD + length 长度的buffer尾部
+ */
     for (i = 0; i < EC_TX_RING_SIZE; i++) {
         if (!(device->tx_skb[i] = dev_alloc_skb(ETH_FRAME_LEN))) {
             EC_MASTER_ERR(master, "Error allocating device socket buffer!\n");
             ret = -ENOMEM;
             goto out_tx_ring;
         }
-
+/*
+ *                            skb_reserve(skb, resv_len)
+ *                                       |
+ *                                      \|/                              
+ *		_____________	 ------>   _________________    
+ *		|	 ...	 |   |   	   |    resv_len    |
+ *		|	 head ---|---|   ----> |________________|
+ *		|	 data ---|-------| |   | 			    |
+ *		|	 tail ---|---------|   | 	length	    |
+ *		|			 |			   | 			    |
+ *		|	 end  ---|------|	   | 			    |
+ *		|	 ...	 |		|----->|________________|
+ *		|____________|			   | skb_shared_info |
+ *								   |________________|
+ * 调用 skb_reserve(skb, len) 之后，会将data 和 tail 指向 len 开始的位置，
+ * 即在 skb->head 和 skb->data 之间，加入一个保留的头部空间（resv_len），
+ * 便于协议栈做头部扩展，而不需要移动 data 指针后面的数据.
+ */
         // add Ethernet-II-header
         skb_reserve(device->tx_skb[i], ETH_HLEN);
+
+/*
+ *							  skb_put(skb, put_len)
+ *										 |
+ *										\|/ 							 
+ *		_____________	 ------>   _____________________	
+ *		|	 ...	 |	 |		   |       resv_len     |
+ *		|	 head ---|---|	 ----> |____________________|____
+ *		|	 data ---|-------|     |				    |    \
+ *		|	 tail ---|---------|   |	   put_len	    |     \
+ *		|			 |		   |-->|____________________|   length
+ *		|	 end  ---|------|	   |				    |     /
+ *		|	 ...	 |		|----->|____________________|____/
+ *		|____________|			   |   skb_shared_info  |
+ *								   |____________________|
+ * skb put负责向sk指向的buffer中添加数据.在将数据memcpy(skb->data, put_len)
+ * 到data指针开始的位置时，需要调用skb_put移动tail指针到skb->data + put_len 位置.
+ */
+
+/*
+ *							  skb_push(skb, push_len)
+ *										 |
+ *										\|/ 							 
+ *		_____________	 --------> __________________________	
+ *		|	 ...	 |	 |		   |resv_len - push_len |    \
+ *		|	 head ---|---|	 ----> |____________________|    resv_len
+ *		|	 data ---|-------|	   |	  push_len    	|   
+ *		|	 tail ---|---------|   |____________________|____/
+ *		|			 |		   |   |                    |    \    
+ *		|	 end  ---|-----|   |   |	  put_len    	|     \
+ *		|	 ...	 |	   |   |-->|____________________|    length
+ *		|____________|	   |	   |                    |     /
+ *						   |------>|____________________|____/
+ *                                 |  skb_shared_info   |
+ *                                 |____________________|
+ * skb push在skb->data指针前面继续添加数据.例如在协议栈TX数据包时，
+ * 需要添加IP，UDP等协议头部信息，则会调用skb_push将skb->data指针向上移动push_len长度.
+ */
+
+/*
+ *							  skb_pull(skb, push_len)
+ *										 |
+ *										\|/ 							 
+ *		_____________	 ------>   _____________________	
+ *		|	 ...	 |	 |		   |	   resv_len 	|
+ *		|	 head ---|---|	 ----> |____________________|____
+ *		|	 data ---|-------|	   |					|	 \
+ *		|	 tail ---|---------|   |	   put_len		|	  \
+ *		|			 |		   |-->|____________________|	length
+ *		|	 end  ---|------|	   |					|	  /
+ *		|	 ...	 |		|----->|____________________|____/
+ *		|____________|			   |   skb_shared_info	|
+ *								   |____________________|
+ * skb pull从skb->data指向的位置向下移动，类似于pop出栈.将上一次push_len给pop掉，
+ * 则skb->data回到skb_put时的起始位置.这主要被协议栈RX收包时，去除协议头时使用.
+ */
         eth = (struct ethhdr *) skb_push(device->tx_skb[i], ETH_HLEN);
         eth->h_proto = htons(0x88A4);
         memset(eth->h_dest, 0xFF, ETH_ALEN);
@@ -486,6 +584,7 @@ void ec_device_poll(
 #ifdef EC_DEBUG_RING
     do_gettimeofday(&device->timeval_poll);
 #endif
+	/* 注册的ec_poll */
     device->poll(device->dev);
 }
 
@@ -570,6 +669,15 @@ void ecdev_withdraw(ec_device_t *device /**< EtherCAT device */)
  *
  * \return 0 on success, else < 0
  * \ingroup DeviceInterface
+ */
+/*
+ * insmod XX网卡驱动XX.ko时会调用到probe函数,probe函数又会调用ecdev_offer.
+ * 以rt8139网卡为例，rtl8139_pci_driver的probe函数是rtl8139_init_one,
+ * rtl8139_init_one定义在8139too-3.4-ethercat.c文件中,该函数逻辑:
+ * 1)stp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)给主站绑定一个网卡,
+ * 2)接着ecdev_open(tp->ecdev)打开主站，主站进入EC_IDLE状态，
+ * ecdev_open -> ec_master_enter_idle_phase -> ec_master_thread_start循环执行
+ * 线程ec_master_idle_thread
  */
 int ecdev_open(ec_device_t *device /**< EtherCAT device */)
 {

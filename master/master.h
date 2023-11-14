@@ -219,6 +219,7 @@ struct ec_master {
     ec_device_stats_t device_stats; /**< Device statistics. */
 
     ec_fsm_master_t fsm; /**< Master state machine. */
+	/* 主状态机及其子状态机执行过程中操作的数据报文 */
     ec_datagram_t fsm_datagram; /**< Datagram used for state machines. */
     ec_master_phase_t phase; /**< Master phase. */
     unsigned int active; /**< Master has been activated. */
@@ -237,6 +238,11 @@ struct ec_master {
 
     u64 app_time; /**< Time of the last ecrt_master_sync() call. */
     u64 dc_ref_time; /**< Common reference timestamp for DC start times. */
+	/*
+	 * 应用专用数据报用于时钟同(ref_sync_datagram,sync_datagram,sync_mon_datagram)
+	 * 应用专用数据报用于时钟同步，与时钟强相关，它们比较特殊，它们的数据区大小是恒定的,
+	 * 所以其数据区在主站初始化时就已分配内存，应用调用时直接填数据发送，避免linux的内存分配带来时钟的偏差.
+	 */
     ec_datagram_t ref_sync_datagram; /**< Datagram used for synchronizing the
                                        reference clock to the master clock. */
     ec_datagram_t sync_datagram; /**< Datagram used for DC drift
@@ -268,6 +274,13 @@ struct ec_master {
     struct semaphore ext_queue_sem; /**< Semaphore protecting the \a
                                       ext_datagram_queue. */
 
+	/*
+	* ec_fsm_slave及其子fsm用到的数据报文.
+	* ext_datagram_ring[]是一个环形队列，当ec_fsm_slave从站状态机处于ready状态，
+	* 可以开始处理与slave相关请求，如配置、扫描、SDO、PDO等，这时会从
+	* ext_datagram_ring[]中给该ec_fsm_slave分配一个数据报，并运行fsm_slave状态机
+	* 检查并处理请求
+	*/
     ec_datagram_t ext_datagram_ring[EC_EXT_RING_SIZE]; /**< External datagram
                                                          ring. */
     unsigned int ext_ring_idx_rt; /**< Index in external datagram ring for RT

@@ -140,7 +140,7 @@ void ec_datagram_unqueue(ec_datagram_t *datagram /**< EtherCAT datagram. */)
 
 /** Allocates internal payload memory.
  *
- * If the allocated memory is already larger than requested, nothing ist done.
+ * If the allocated memory is already larger than requested, nothing is done.
  *
  * \attention If external payload memory has been provided, no range checking
  *            is done!
@@ -369,6 +369,45 @@ int ec_datagram_frmw(
 /** Initializes an EtherCAT BRD datagram.
  *
  * \return Return value of ec_datagram_prealloc().
+ */
+/*
+ * 报文格式(下面的图表在sourceinsight中会显示乱掉，可在linux下用vim看，windows下用notepad看)
+ *
+ * |            以太网帧头         |
+ * |<----------------------------->|
+ * |     6B    |    6B    |   2B   |      2B     |                44-1498B        |  4B  |
+ * |___________|__________|________|_____________|________________________________|______|
+ * |  目的地址 |   源地址 | 帧类型 | EtherCAT头  |               EtherCAT数据     |  FCS |
+ * |___________|__________|________|_____________|________________________________|______|
+ *                         0x88A4 /              \                                       \
+ *                               /                \                                       \
+ *                              /                  \                                       \
+ *                             / 11bit  1bit   4bit \                                       \
+ *                             ______________________________________________________________
+ *                            | 长度 | 保留位 | 类型 |   子报文   |    子报文    |    ...   |
+ *                            |______|________|______|____________|______________|__________|
+ *                                                   /             \
+ *                                                  /               \
+ *                                     ---------- -/                 ----------------
+  *                                   /    10B             最多1486B            2B   \
+ *                                   _________________________________________________
+ *                                   |   子报文头 |           数据         |    WKC  |
+ *                                   |____________|________________________|_________|
+ *                                  /              \
+ *                                 /                \
+ *           ----------------------                  ----------------------------
+ *          / 8bit    8bit              32bit       11bit   4bit   1bit   16bit  \
+ *          ______________________________________________________________________
+ *         |  命令 |  索引 |         地址区       |  长度  |  R  |  M  |  状态位 |
+ *         |_______|_______|______________________|________|_____|_____|_________|
+ *                         /                       \
+ *                        /                         \
+ *                      ______________________________
+ *                      |   16bit ADP  |   16bit ADO  |
+ *                      |______________|______________|
+ *   针对广播报文:
+ *     ADP（Address Position），16位从站设备地址为0.
+ *     ADO（Address Offset），16位从站设备内部寄存器地址.             
  */
 int ec_datagram_brd(
         ec_datagram_t *datagram, /**< EtherCAT datagram. */
