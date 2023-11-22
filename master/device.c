@@ -590,11 +590,18 @@ void ec_device_poll(
     do_gettimeofday(&device->timeval_poll);
 #endif
 	/*
-	 * 以rt8139网卡为例，加载网卡驱动时:
-	 * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver)--> rtl8139_pci_driver的
-	 * probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中）.
+	 * 网卡的poll函数是哪个？
+	 * 以rt8139网卡为例，加载网卡驱动时， rtl8139_init_module --> pci_module_init  (&rtl8139_pci_driver)
+	 * --> rtl8139_pci_driver的probe函数 rtl8139_init_one （8139too-3.4-ethercat.c文件中）.
 	 * rtl8139_init_one执行tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)
-	 * 设置网卡的device->poll函数为ec_poll（8139too-3.4-ethercat.c文件中）.
+	 * 设置网卡的device->poll函数为 ec_poll （8139too-3.4-ethercat.c文件中）.
+	
+	 * 接收流程：
+	 * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即 ec_poll -->
+	 * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx --> ecdev_receive
+	 * --> ec_master_receive_datagrams
+	 * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
+	 * 传给 ec_master_receive_datagrams 的参数ec_data不含以太网报文头.
 	 */
     device->poll(device->dev);
 }
@@ -763,6 +770,7 @@ void ecdev_receive(
         size_t size /**< number of bytes received */
         )
 {
+    /* 去掉以太网头 */
     const void *ec_data = data + ETH_HLEN;
     size_t ec_size = size - ETH_HLEN;
 

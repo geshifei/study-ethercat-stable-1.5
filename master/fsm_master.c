@@ -195,6 +195,11 @@ void ec_fsm_master_restart(
  *
  * Starts with getting slave count and slave states.
  */
+/*
+ * 没有紧急报文要处理的情况下：
+ * ec_fsm_master_state_start封装一条读AL status的广播报文，
+ * 然后将主站状态机的处理函数fsm->state设为ec_fsm_master_state_broadcast.
+ */
 void ec_fsm_master_state_start(
         ec_fsm_master_t *fsm /**< Master state machine. */
         )
@@ -881,8 +886,14 @@ void ec_fsm_master_state_dc_measure_delays(
     EC_MASTER_DBG(master, 1, "Scanning slave %u on %s link.\n",
             fsm->slave->ring_position,
             ec_device_names[fsm->slave->device_index != 0]);
+    /* 主站状态机处理函数 */
     fsm->state = ec_fsm_master_state_scan_slave;
+    /* 从站状态机处理函数设为 ec_fsm_slave_scan_state_start */
     ec_fsm_slave_scan_start(&fsm->fsm_slave_scan, fsm->slave);
+    /*
+     * 执行从站状态机处理函数 ec_fsm_slave_scan_state_start.
+     * 接着将从站状态处理函数设为 ec_fsm_slave_scan_state_address.
+     */
     ec_fsm_slave_scan_exec(&fsm->fsm_slave_scan); // execute immediately
     fsm->datagram->device_index = fsm->slave->device_index;
 }

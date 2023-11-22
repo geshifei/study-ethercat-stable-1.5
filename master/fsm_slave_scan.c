@@ -145,7 +145,9 @@ int ec_fsm_slave_scan_exec(ec_fsm_slave_scan_t *fsm /**< slave state machine */)
         // datagram was not sent or received yet.
         return ec_fsm_slave_scan_running(fsm);
     }
-
+    /* ec_fsm_master_state_dc_measure_delays --> ec_fsm_slave_scan_start将从站状态机
+     * 设为 ec_fsm_slave_scan_state_start
+     */
     fsm->state(fsm);
     return ec_fsm_slave_scan_running(fsm);
 }
@@ -174,6 +176,11 @@ int ec_fsm_slave_scan_success(const ec_fsm_slave_scan_t *fsm /**< slave state ma
 void ec_fsm_slave_scan_state_start(ec_fsm_slave_scan_t *fsm /**< slave state machine */)
 {
     // write station address
+    /*
+     * 参考手册：
+     * Register Configured Station Address (0x0010:0x0011)
+     * description：Address used for node addressing (FPRD/FPWR/FPRW/FRMW commands).
+     */
     ec_datagram_apwr(fsm->datagram, fsm->slave->ring_position, 0x0010, 2);
     EC_WRITE_U16(fsm->datagram->data, fsm->slave->station_address);
     fsm->retries = EC_FSM_RETRIES;

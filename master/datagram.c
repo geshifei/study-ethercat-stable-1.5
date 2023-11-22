@@ -207,6 +207,11 @@ int ec_datagram_aprd(
  *
  * \return Return value of ec_datagram_prealloc().
  */
+/*
+ * 参考手册：
+ * APWR:Auto Increment Write.A slave increments the address.
+ * A slave writes data to a memory area if the address received is zero.
+ */
 int ec_datagram_apwr(
         ec_datagram_t *datagram, /**< EtherCAT datagram. */
         uint16_t ring_position, /**< Auto-increment address. */
@@ -405,7 +410,7 @@ int ec_datagram_frmw(
  *                      ______________________________
  *                      |   16bit ADP  |   16bit ADO  |
  *                      |______________|______________|
- *   针对广播报文:
+ *   广播报文:
  *     ADP（Address Position），16位从站设备地址为0.
  *     ADO（Address Offset），16位从站设备内部寄存器地址.             
  */

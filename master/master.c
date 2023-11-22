@@ -1006,7 +1006,7 @@ void ec_master_queue_datagram(
             return;
         }
     }
-
+    /* 将 datagram->queue 所代表的list_head插入master->datagram_queue代表的队列的尾部 */
     list_add_tail(&datagram->queue, &master->datagram_queue);
     datagram->state = EC_DATAGRAM_QUEUED;
 }
@@ -1167,6 +1167,20 @@ void ec_master_send_datagrams(
  *
  * \return 0 in case of success, else < 0
  */
+/*
+ * 网卡的poll函数是哪个？
+ * 以rt8139网卡为例，加载网卡驱动时， rtl8139_init_module --> pci_module_init  (&rtl8139_pci_driver)
+ * --> rtl8139_pci_driver的probe函数 rtl8139_init_one （8139too-3.4-ethercat.c文件中）.
+ * rtl8139_init_one执行tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)
+ * 设置网卡的device->poll函数为 ec_poll （8139too-3.4-ethercat.c文件中）.
+
+ * 接收流程：
+ * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即ec_poll -->
+ * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx --> ecdev_receive
+ * --> ec_master_receive_datagrams
+ * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
+ * 传给 ec_master_receive_datagrams 的参数 frame_data 不含以太网报文头.
+ */
 void ec_master_receive_datagrams(
         ec_master_t *master, /**< EtherCAT master */
         ec_device_t *device, /**< EtherCAT device */
@@ -1196,7 +1210,47 @@ void ec_master_receive_datagrams(
 
     cur_data = frame_data;
 
+/*
+ * 报文格式(下面的图表在sourceinsight中会显示乱掉，可在linux下用vim看，windows下用notepad看)
+ *
+ * |            以太网帧头         |
+ * |<----------------------------->|
+ * |     6B    |    6B    |   2B   |      2B     |                44-1498B        |  4B  |
+ * |___________|__________|________|_____________|________________________________|______|
+ * |  目的地址 |   源地址 | 帧类型 | EtherCAT头  |               EtherCAT数据     |  FCS |
+ * |___________|__________|________|_____________|________________________________|______|
+ *                         0x88A4 /              \                                       \
+ *                               /                \                                       \
+ *                              /                  \                                       \
+ *                             / 11bit  1bit   4bit \                                       \
+ *                             ______________________________________________________________
+ *                            | 长度 | 保留位 | 类型 |   子报文   |    子报文    |    ...   |
+ *                            |______|________|______|____________|______________|__________|
+ *                                                   /             \
+ *                                                  /               \
+ *                                     ---------- -/                 ----------------
+  *                                   /    10B             最多1486B            2B   \
+ *                                   _________________________________________________
+ *                                   |   子报文头 |           数据         |    WKC  |
+ *                                   |____________|________________________|_________|
+ *                                  /              \
+ *                                 /                \
+ *           ----------------------                  ----------------------------
+ *          / 8bit    8bit              32bit       11bit   4bit   1bit   16bit  \
+ *          ______________________________________________________________________
+ *         |  命令 |  索引 |         地址区       |  长度  |  R  |  M  |  状态位 |
+ *         |_______|_______|______________________|________|_____|_____|_________|
+ *                         /                       \
+ *                        /                         \
+ *                      ______________________________
+ *                      |   16bit ADP  |   16bit ADO  |
+ *                      |______________|______________|
+ *   针对广播报文:
+ *     ADP（Address Position），16位从站设备地址为0.
+ *     ADO（Address Offset），16位从站设备内部寄存器地址.             
+ */
     // check length of entire frame
+    /*  注意一下上图中的‘长度’字段位于低字节，网络字节序是大端，先发送高数值位的字节 */
     frame_size = EC_READ_U16(cur_data) & 0x07FF;
     cur_data += EC_FRAME_HEADER_SIZE;
 
@@ -1584,6 +1638,9 @@ void ec_master_exec_slave_fsms(
 
 /** Master kernel thread function for IDLE phase.
  */
+/*
+ * ec_init_moduleec_init_module --> ec_master_init --> ec_datagram_prealloc 为 master->fsm_datagram的payload分配内存空间
+ */
 static int ec_master_idle_thread(void *priv_data)
 {
     ec_master_t *master = (ec_master_t *) priv_data;
@@ -1605,10 +1662,12 @@ static int ec_master_idle_thread(void *priv_data)
         // receive
         down(&master->io_sem);
         /*
-         * 接收流程：
-         * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即ec_poll -->
-         * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx，从DMA缓冲区拷贝
-         * 数据帧到device的netdev_priv(dev)->rx_ring.
+		 * 接收流程：
+		 * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即ec_poll -->
+		 * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx --> ecdev_receive
+		 * --> ec_master_receive_datagrams
+		 * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
+		 * 传给 ec_master_receive_datagrams 的参数ec_data不含以太网报文头.
          */
         ecrt_master_receive(master);
         up(&master->io_sem);
@@ -1620,10 +1679,17 @@ static int ec_master_idle_thread(void *priv_data)
         /*
          * ec_init_module加载主站时，通过ec_init_module --> ec_master_init -->
          * ec_fsm_master_init --> ec_fsm_master_reset，将master->fsm->state状态
-         * 处理函数设置为ec_fsm_master_state_start.
+         * 处理函数设置为 ec_fsm_master_state_start.
+         * 所以下面的 ec_fsm_master_exec(&master->fsm) 执行的是 ec_fsm_master_state_start.
+         * ec_fsm_master_state_start 为状态机封装本周期需要发送的子报文.
+         * c_fsm_master_state_start 只是封装了一条读AL status的广播报文，并没有发送该报文.
+         * 然后将主站状态机的处理函数fsm->state设为 ec_fsm_master_state_broadcast.
          */
         fsm_exec = ec_fsm_master_exec(&master->fsm);
-
+        /*
+         * 主站状态机中存在一些子状态机，如fsm_coe,fsm_soe,fsm_pdo,fsm_slave_config，
+         * 主站状态机需要等待子状态机完成相应工作，然后主站状态机转入下一状态.
+         */
         ec_master_exec_slave_fsms(master);
 
         up(&master->master_sem);
@@ -1631,8 +1697,10 @@ static int ec_master_idle_thread(void *priv_data)
         // queue and send
         down(&master->io_sem);
         if (fsm_exec) {
+            /* 把fsm_exec = ec_fsm_master_exec(&master->fsm)封装的报文加入发送队列master->datagram_queue */
             ec_master_queue_datagram(master, &master->fsm_datagram);
         }
+        /* 发送master->datagram_queue中的报文 */
         ecrt_master_send(master);
 #ifdef EC_USE_HRTIMER
         sent_bytes = master->devices[EC_DEVICE_MAIN].tx_skb[
@@ -1645,6 +1713,7 @@ static int ec_master_idle_thread(void *priv_data)
             ec_master_nanosleep(master->send_interval * 1000);
 #else
             set_current_state(TASK_INTERRUPTIBLE);
+            /* 主站处理IDLE状态下，睡眠1个jiffies后调度执行 */
             schedule_timeout(1);
 #endif
         } else {
@@ -2549,11 +2618,18 @@ void ecrt_master_send(ec_master_t *master)
 
 /*****************************************************************************/
 /*
- * 以rt8139网卡为例，加载网卡驱动时:
- * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver)--> rtl8139_pci_driver的
- * probe函数是rtl8139_init_one（8139too-3.4-ethercat.c文件中）.
+ * 网卡的poll函数是哪个？
+ * 以rt8139网卡为例，加载网卡驱动时， rtl8139_init_module --> pci_module_init  (&rtl8139_pci_driver)
+ * --> rtl8139_pci_driver的probe函数 rtl8139_init_one （8139too-3.4-ethercat.c文件中）.
  * rtl8139_init_one执行tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)
- * 设置网卡的device->poll函数为ec_poll（8139too-3.4-ethercat.c文件中）.
+ * 设置网卡的device->poll函数为 ec_poll （8139too-3.4-ethercat.c文件中）.
+
+ * 接收流程：
+ * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即ec_poll -->
+ * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx --> ecdev_receive
+ * --> ec_master_receive_datagrams
+ * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
+ * 传给 ec_master_receive_datagrams 的参数ec_data不含以太网报文头.
  */
 void ecrt_master_receive(ec_master_t *master)
 {

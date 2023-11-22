@@ -2299,9 +2299,23 @@ static int rtl8139_poll(struct napi_struct *napi, int budget)
 
 	return work_done;
 }
+/*
+ * 网卡的poll函数是哪个？
+ * 以rt8139网卡为例，加载网卡驱动时， rtl8139_init_module --> pci_module_init  (&rtl8139_pci_driver)
+ * --> rtl8139_pci_driver的probe函数 rtl8139_init_one （8139too-3.4-ethercat.c文件中）.
+ * rtl8139_init_one执行tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE)
+ * 设置网卡的device->poll函数为 ec_poll （8139too-3.4-ethercat.c文件中）.
 
+ * 接收流程：
+ * ecrt_master_receive --> ec_device_poll --> device->poll(device->dev)即ec_poll -->
+ * rtl8139_interrupt（8139too-3.4-ethercat.c文件）--> rtl8139_rx --> ecdev_receive
+ * --> ec_master_receive_datagrams
+ * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
+ * 传给 ec_master_receive_datagrams 的参数ec_data不含以太网报文头.
+ */
 void ec_poll(struct net_device *dev)
 {
+    /* 这个函数就在本文件中 */
 	rtl8139_interrupt(0, dev);
 }
 
@@ -2356,6 +2370,7 @@ static irqreturn_t rtl8139_interrupt (int irq, void *dev_instance)
 	if (status & RxAckBits){
 		if (tp->ecdev) {
 			/* EtherCAT device: Just receive all frames */
+            /* rtl8139_rx 就在本文件中 */
 			rtl8139_rx(dev, tp, 100); // FIXME
 		} else {
 			/* Mark for polling */

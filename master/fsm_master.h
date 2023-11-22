@@ -75,7 +75,14 @@ struct ec_fsm_master {
     ec_master_t *master; /**< master the FSM runs on */
     ec_datagram_t *datagram; /**< datagram used in the state machine */
     unsigned int retries; /**< retries on datagram timeout. */
-
+    /*
+     * 主站状态机执行函数，不同状态执行不同的函数.
+     * ec_init_module加载主站时，通过ec_init_module --> ec_master_init -->
+     * ec_fsm_master_init --> ec_fsm_master_reset，将master->fsm->state状态
+     * 处理函数设置为ec_fsm_master_state_start，实现对状态机的数据帧进行初始化.
+     * ec_master_idle_thread线程执行ec_fsm_master_state_start后，再将state指向
+     * ec_fsm_master_state_broadcast()广播函数.
+     */
     void (*state)(ec_fsm_master_t *); /**< master state function */
     ec_device_index_t dev_idx; /**< Current device index (for scanning etc.).
                                 */
@@ -85,7 +92,7 @@ struct ec_fsm_master {
                                               device. */
 	/* 响应的从站数.
 	 * 空闲阶段master发送EC_DATAGRAM_BRD子报文，从站响应子报文后增加WKC计数值，
-	 * slaves_responding变量就是从站响应后的WKC值
+	 * slaves_responding变量就是从站响应后的WKC值.
 	 */
     unsigned int slaves_responding[EC_MAX_NUM_DEVICES]; /**< Number of
                                                           responding slaves
