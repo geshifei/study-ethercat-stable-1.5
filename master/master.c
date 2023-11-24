@@ -1681,9 +1681,19 @@ static int ec_master_idle_thread(void *priv_data)
          * ec_fsm_master_init --> ec_fsm_master_reset，将master->fsm->state状态
          * 处理函数设置为 ec_fsm_master_state_start.
          * 所以下面的 ec_fsm_master_exec(&master->fsm) 执行的是 ec_fsm_master_state_start.
-         * ec_fsm_master_state_start 为状态机封装本周期需要发送的子报文.
-         * c_fsm_master_state_start 只是封装了一条读AL status的广播报文，并没有发送该报文.
-         * 然后将主站状态机的处理函数fsm->state设为 ec_fsm_master_state_broadcast.
+         * 总结一下本段函数的处理流程：
+         * 1, ec_fsm_master_state_start 为状态机封装本周期需要发送的子报文.
+         * 2, c_fsm_master_state_start 只是封装了一条读AL status的广播报文，并没有发送该报文.
+         * 3, 将主站状态机的处理函数fsm->state设为 ec_fsm_master_state_broadcast.
+         * 4, 通过 ec_master_queue_datagram 将报文加入发送队列master->datagram_queue.
+         * 5, 通过 ecrt_master_send 发送master->datagram_queue中的报文.
+         *
+         * 解释一下为什么开机发送的第一条报文是读AL status的报文：
+         * ec_fsm_master_state_start 状态封装报文后，广播读AL status报文，从站返回WKC，
+         * 从而知道master下面挂了多少个从站.
+         * 下一状态 ec_fsm_master_state_broadcast 比较读取到的从站数datagram->working_counter 和
+         * 主站状态机上一次记录的从站数fsm->slaves_responding，二者不相等说明网络拓扑改变了，需要
+         * 重新扫描
          */
         fsm_exec = ec_fsm_master_exec(&master->fsm);
         /*
