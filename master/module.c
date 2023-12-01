@@ -100,11 +100,9 @@ MODULE_PARM_DESC(run_on_cpu, "Bind kthreads to a specific cpu");
  */
 /*
  * 如何看代码：
- * 1，加载主站ec_master模块，进入EC_ORPHANED阶段
- * 大部分操作是由ec_master_init完成的，参考函数说明.
- * 重要的是，master->fsm->state状态处理函数设置为ec_fsm_master_state_start.
- * 2，加载网卡驱动，主站进入EC_IDLE阶段
- * 加载网卡驱动时，根据网卡的mac，将网卡绑定到指定的主站，
+ * 1，加载主站ec_master模块，进入EC_ORPHANED阶段，主站初始化是由ec_master_init完成的.
+ * 主站的第一个状态master->fsm->state被设置为ec_fsm_master_state_start.
+ * 2，加载网卡驱动，主站进入EC_IDLE阶段，根据网卡的mac，将网卡绑定到指定的主站，
  * 绑定后主站进入EC_IDLE阶段，并执行ec_master_idle_thread线程.
  * 以rt8139为例:
  * rtl8139_init_module --> pci_module_init (&rtl8139_pci_driver) -->
