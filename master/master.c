@@ -287,6 +287,24 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
     }
 
     // create state machine object
+    /*
+     * 注意主站状态机报文 master->fsm.datagram 的分配：
+     *
+     * struct ec_master {
+     *    ec_fsm_master_t fsm; ---------  2) 通过下面的 ec_fsm_master_init 将fsm.datagram 指向下面的地址
+     *                                   |
+     *                                  \|/
+     *    ec_datagram_t fsm_datagram;  --------- 1）通过前面语句为 fsm_datagram.data 分配 payload
+     * }                                         ec_datagram_prealloc(&master->fsm_datagram, EC_MAX_DATA_SIZE);
+     *
+     * struct ec_fsm_master {
+     *     ec_datagram_t *datagram;
+     * }
+     *
+     * struct ec_datagram_t {
+     *     uint8_t *data; Datagram payload.
+     * }
+	 */
     ec_fsm_master_init(&master->fsm, master, &master->fsm_datagram);
 
     // alloc external datagram ring
@@ -1180,6 +1198,9 @@ void ec_master_send_datagrams(
  * --> ec_master_receive_datagrams
  * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
  * 传给 ec_master_receive_datagrams 的参数 frame_data 不含以太网报文头.
+ *
+ * ec_master_receive_datagrams 根据接收到的报文 frame_data 的type、index、state等，
+ * 找到master报文队列 master->datagram_queue 中对应的报文，并从 master->datagram_queue 删除.
  */
 void ec_master_receive_datagrams(
         ec_master_t *master, /**< EtherCAT master */
@@ -1639,7 +1660,26 @@ void ec_master_exec_slave_fsms(
 /** Master kernel thread function for IDLE phase.
  */
 /*
- * ec_init_moduleec_init_module --> ec_master_init --> ec_datagram_prealloc 为 master->fsm_datagram的payload分配内存空间
+ * 注意一下 ec_init_module -> ec_master_init 中对主站状态机的报文初始化：
+ *
+ * struct ec_master {
+ *    ec_fsm_master_t fsm; ---------  2) 通过下面的 ec_fsm_master_init 将fsm.datagram 指向下面的地址
+ *                                   |
+ *                                  \|/
+ *    ec_datagram_t fsm_datagram;  --------- 1）通过前面语句为 fsm_datagram.data 分配 payload
+ * }                                         ec_datagram_prealloc(&master->fsm_datagram, EC_MAX_DATA_SIZE);
+ *
+ * struct ec_fsm_master {
+ *     ec_datagram_t *datagram;
+ * }
+ *
+ * struct ec_datagram_t {
+ *     uint8_t *data; Datagram payload.
+ * }
+ *
+ * 主站发送报文时，数据报 master->fsm.datagram也即master->fsm.fsm_datagram 插入主站发送队列 master->datagram_queue.
+ * 主站接收数据报文时，通过比较网卡接收到报文的type、index、state等，在 master->datagram_queue 中找到对应的报文，
+ * 并将报文从发送队列中删除.
  */
 static int ec_master_idle_thread(void *priv_data)
 {
@@ -1668,6 +1708,9 @@ static int ec_master_idle_thread(void *priv_data)
 		 * --> ec_master_receive_datagrams
 		 * ecdev_receive入口处去掉了以太网报文头：ec_data = data + ETH_HLEN;
 		 * 传给 ec_master_receive_datagrams 的参数ec_data不含以太网报文头.
+		 *
+		 * ec_master_receive_datagrams 根据接收到的报文 frame_data 的type、index、state等，
+		 * 找到master报文队列 master->datagram_queue 中对应的报文，并从 master->datagram_queue 删除.
          */
         ecrt_master_receive(master);
         up(&master->io_sem);
@@ -1680,11 +1723,11 @@ static int ec_master_idle_thread(void *priv_data)
          * ec_init_module加载主站时，通过ec_init_module --> ec_master_init -->
          * ec_fsm_master_init --> ec_fsm_master_reset，将master->fsm->state状态
          * 处理函数设置为 ec_fsm_master_state_start.
-         * 所以下面的 ec_fsm_master_exec(&master->fsm) 执行的是 ec_fsm_master_state_start.
+         * 所以IgH第一次运行时，下面的 ec_fsm_master_exec(&master->fsm) 执行的是 ec_fsm_master_state_start.
          * 总结一下本段函数的处理流程：
-         * 1, ec_fsm_master_state_start 为状态机封装本周期需要发送的子报文.
-         * 2, c_fsm_master_state_start 只是封装了一条读AL status的广播报文，并没有发送该报文.
-         * 3, 将主站状态机的处理函数fsm->state设为 ec_fsm_master_state_broadcast.
+         * 1, ec_fsm_master_exec 执行 master->fsm->state 状态处理函数为状态机封装本周期需要发送的子报文.
+         * 2, IgH第一次运行时的状态函数 ec_fsm_master_state_start 封装了一条读AL status的广播报文，并没有发送该报文.
+         * 3, 将主站状态机的处理函数fsm->state下一状态设为 ec_fsm_master_state_broadcast.
          * 4, 通过 ec_master_queue_datagram 将报文加入发送队列master->datagram_queue.
          * 5, 通过 ecrt_master_send 发送master->datagram_queue中的报文.
          *
@@ -1707,7 +1750,7 @@ static int ec_master_idle_thread(void *priv_data)
         // queue and send
         down(&master->io_sem);
         if (fsm_exec) {
-            /* 把fsm_exec = ec_fsm_master_exec(&master->fsm)封装的报文加入发送队列master->datagram_queue */
+            /* 把fsm_exec = ec_fsm_master_exec(&master->fsm)封装的报文加入发送队列 master->datagram_queue */
             ec_master_queue_datagram(master, &master->fsm_datagram);
         }
         /* 发送master->datagram_queue中的报文 */
