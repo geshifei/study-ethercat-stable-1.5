@@ -1234,13 +1234,31 @@ void ec_master_receive_datagrams(
 /*
  * 报文格式(下面的图表在sourceinsight中会显示乱掉，可在linux下用vim看，windows下用notepad看)
  *
+ * !!!注意！！！  报文左端为低字节，右端为高字节，以太网发送数据时，从最左端到最右段按bit
+ * 发送，也就是说，低字节先发送。以ecat帧类型为例88是低字节先发送，A4是高字节后发送。
+ *
+ * ecat帧类型0x88A4通过eth->h_proto = htons(0x88A4)将本地字节序转换成了大端的网络字节序（高字
+ * 节在地地址），即88存在地地址，A4存在高地址。
+ *
+ * 再以读从站状态为例，广播报文的ADO是0x0130，在下图中16bit ADO先发送低字节30，再发送高字节01。
+ *
+ * 再以2字节的Ethercat头为例，如果dmesg看的ecat头是0E 10，由于是低字节在前，所以2字节应该是
+ * 10 0E（0001 0000 0000 1110），下图中，"长度"在左端，是低字节部分，所以长度=000 0000 1110= 14个字节。
+ * 由于ethernet帧最小46个字节，所以需要做一些填充，最可dmesg能看到如下log:
+ * [18773.590656] EtherCAT DEBUG 0: frame size: 46
+ * [18773.590656] EtherCAT DEBUG 0: Sending frame:
+ * [18773.590658] EtherCAT DEBUG: FF FF FF FF FF FF 6C 24 08 29 52 19 88 A4 0E 10
+ * [18773.590664] EtherCAT DEBUG: 07 00 00 00 30 01 02 00 00 00 00 00 00 00 00 00
+ * [18773.590669] EtherCAT DEBUG: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ * [18773.590674] EtherCAT DEBUG: 00 00 00 00 00 00 00 00 00 00 00 00
+ *
  * |            以太网帧头         |
  * |<----------------------------->|
  * |     6B    |    6B    |   2B   |      2B     |                44-1498B        |  4B  |
  * |___________|__________|________|_____________|________________________________|______|
  * |  目的地址 |   源地址 | 帧类型 | EtherCAT头  |               EtherCAT数据     |  FCS |
  * |___________|__________|________|_____________|________________________________|______|
- *                         0x88A4 /              \                                       \
+ *                           88A4 /              \                                       \
  *                               /                \                                       \
  *                              /                  \                                       \
  *                             / 11bit  1bit   4bit \                                       \
@@ -1266,10 +1284,11 @@ void ec_master_receive_datagrams(
  *                      ______________________________
  *                      |   16bit ADP  |   16bit ADO  |
  *                      |______________|______________|
- *   针对广播报文:
+ *   广播报文:
  *     ADP（Address Position），16位从站设备地址为0.
  *     ADO（Address Offset），16位从站设备内部寄存器地址.             
  */
+
     // check length of entire frame
     /*  注意一下上图中的‘长度’字段位于低字节，网络字节序是大端，先发送高数值位的字节 */
     frame_size = EC_READ_U16(cur_data) & 0x07FF;
@@ -1725,9 +1744,9 @@ static int ec_master_idle_thread(void *priv_data)
          * 处理函数设置为 ec_fsm_master_state_start.
          * 所以IgH第一次运行时，下面的 ec_fsm_master_exec(&master->fsm) 执行的是 ec_fsm_master_state_start.
          * 总结一下本段函数的处理流程：
-         * 1, ec_fsm_master_exec 执行 master->fsm->state 状态处理函数为状态机封装本周期需要发送的子报文.
-         * 2, IgH第一次运行时的状态函数 ec_fsm_master_state_start 封装了一条读AL status的广播报文(0x0130 AL Status)，并没有发送该报文.
-         * 3, 将主站状态机的处理函数fsm->state下一状态设为 ec_fsm_master_state_broadcast.
+         * 1, ec_fsm_master_exec 执行 master->fsm->state 状态处理函数(ec_fsm_master_state_start),为状态机封装本周期需要发送的子报文.
+         * 2, ec_fsm_master_state_start 封装一条读AL status的广播报文(0x0130 AL Status)，并没有发送该报文.
+         * 3, 设置主站状态机的处理函数fsm->state的下一状态设为 ec_fsm_master_state_broadcast.
          * 4, 通过 ec_master_queue_datagram 将报文加入发送队列master->datagram_queue.
          * 5, 通过 ecrt_master_send 发送master->datagram_queue中的报文.
          *

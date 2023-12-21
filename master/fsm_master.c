@@ -385,6 +385,7 @@ void ec_fsm_master_state_broadcast(
             dev_idx = EC_DEVICE_MAIN;
             next_dev_slave = fsm->slaves_responding[dev_idx];
             ring_position = 0;
+           /* ring_position干什么用的？？？？？？ */
             for (i = 0; i < count; i++, ring_position++) {
                 slave = master->slaves + i;
                 while (i >= next_dev_slave) {
@@ -784,12 +785,18 @@ void ec_fsm_master_state_acknowledge(
 /*****************************************************************************/
 
 /** Start clearing slave addresses.
+ * 封装一条配置从站地址的报文，从站地址设为0x0000
  */
 void ec_fsm_master_enter_clear_addresses(
         ec_fsm_master_t *fsm /**< Master state machine. */
         )
 {
     // broadcast clear all station addresses
+    /*
+     * 寄存器0x0010:0x0011，参考手册说明:
+     * Register Configured Station Address (0x0010:0x0011)
+     * bit15:0 Address used for node addressing(FPRD/FPWR/FPRW/FRMW commands)
+     */
     ec_datagram_bwr(fsm->datagram, 0x0010, 2);
     EC_WRITE_U16(fsm->datagram->data, 0x0000);
     fsm->datagram->device_index = fsm->dev_idx;
