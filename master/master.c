@@ -1238,7 +1238,7 @@ void ec_master_receive_datagrams(
  * 发送，也就是说，低字节先发送。以ecat帧类型为例88是低字节先发送，A4是高字节后发送。
  *
  * ecat帧类型0x88A4通过eth->h_proto = htons(0x88A4)将本地字节序转换成了大端的网络字节序（高字
- * 节在地地址），即88存在地地址，A4存在高地址。
+ * 节在地地址），即88存在低地址，A4存在高地址。
  *
  * 再以读从站状态为例，广播报文的ADO是0x0130，在下图中16bit ADO先发送低字节30，再发送高字节01。
  *
@@ -1750,12 +1750,12 @@ static int ec_master_idle_thread(void *priv_data)
          * 4, 通过 ec_master_queue_datagram 将报文加入发送队列master->datagram_queue.
          * 5, 通过 ecrt_master_send 发送master->datagram_queue中的报文.
          *
-         * 解释一下为什么开机发送的第一条报文是读AL status的报文(0x0130)：
-         * ec_fsm_master_state_start 状态封装报文后，广播读AL status报文，从站返回WKC，
-         * 从而知道master下面挂了多少个从站.
-         * 下一状态 ec_fsm_master_state_broadcast 比较读取到的从站数datagram->working_counter 和
-         * 主站状态机上一次记录的从站数fsm->slaves_responding，二者不相等说明网络拓扑改变了，需要
-         * 重新扫描
+         * 解释一下为什么开机发送的第一条报文是读AL status的报文(0x0130:0x0131)：
+         * ec_fsm_master_state_start 状态机封装报文后，下一状态 ec_fsm_master_state_broadcast
+         * 广播读AL status报文，从站返回WKC，从而知道master下面挂了多少个从站.
+         * 接着比较AL status报文的Working count（从站数datagram->working_counter） 和
+         * 主站上一次记录的从站数fsm->slaves_responding，二者不相等说明网络拓扑改变了，需要
+         * 重新扫描网络。
          */
         fsm_exec = ec_fsm_master_exec(&master->fsm);
         /*
